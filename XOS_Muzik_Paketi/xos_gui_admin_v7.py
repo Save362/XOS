@@ -16,6 +16,7 @@ import random
 import sys
 import os
 from pathlib import Path
+import py_compile
 try:
     import winsound
 except ImportError:
@@ -43,15 +44,6 @@ WIN_WIDTH, WIN_HEIGHT = 1000, 650
 # ----------------------------------------------------------------------
 # Basit sanal dosya sistemi (Dosya Yöneticisi için)
 # ----------------------------------------------------------------------
-
-# ============================================================
-# X OS UPDATE CONFIGURATION
-# ============================================================
-XOS_VERSION = "9.0"
-XOS_GITHUB_OWNER = "YOUR_GITHUB_USERNAME"
-XOS_GITHUB_REPO = "YOUR_XOS_REPOSITORY"
-XOS_RELEASE_ASSET = "xos_gui_admin.py"
-
 class VFile:
     def __init__(self, name, content=""):
         self.name = name
@@ -1815,95 +1807,247 @@ class XOS(tk.Tk):
     # XUPDATETOOL
     # ====================================================================
 
-    # ====================================================================
-    # XUPDATETOOL - GITHUB RELEASES
-    # ====================================================================
 
     def open_xupdate_tool(self):
-        win = self._new_panel("XUpdateTool", 560, 430)
+        # GitHub Releases üzerinden X OS'u indirip otomatik günceller.
+        win = self._new_panel("XUpdateTool", 560, 500)
         self.update_idletasks()
         win.place(
             x=max(10, (self.desktop.winfo_width() - 560) // 2),
             y=max(10, (self.desktop.winfo_height() - 430) // 2),
             width=560,
-            height=430
+            height=500
         )
 
         c = win.content
+        current_version = "9.0"
+        owner = "Save362"
+        repo = "XOS"
 
         tk.Label(
-            c, text="🔄 XUpdateTool",
-            bg=WINDOW_BG,
+            c, text="🔄 XUpdateTool", bg=WINDOW_BG,
             font=("Segoe UI", 20, "bold")
-        ).pack(pady=(25, 4))
+        ).pack(pady=(24, 4))
 
         tk.Label(
             c,
             text="GitHub Releases üzerinden X OS güncellemelerini kontrol eder.",
-            bg=WINDOW_BG,
-            fg="#6b7280"
+            bg=WINDOW_BG, fg="#6b7280"
         ).pack()
 
-        version_label = tk.Label(
-            c,
-            text=f"Yüklü sürüm: v{XOS_VERSION}",
-            bg=WINDOW_BG,
-            font=("Segoe UI", 10, "bold")
-        )
-        version_label.pack(pady=(15, 5))
+        tk.Label(
+            c, text=f"Yüklü sürüm: v{current_version}",
+            bg=WINDOW_BG, font=("Segoe UI", 10, "bold")
+        ).pack(pady=(14, 5))
 
         status = tk.Label(
-            c,
-            text="Kontrol edilmeye hazır.",
-            bg=WINDOW_BG,
-            fg="#374151",
-            wraplength=480,
-            justify="center"
+            c, text="Kontrol edilmeye hazır.",
+            bg=WINDOW_BG, fg="#374151",
+            wraplength=490, justify="center"
         )
-        status.pack(pady=15)
+        status.pack(pady=12)
+
+        progress = tk.Label(c, text="", bg=WINDOW_BG, fg="#6b7280")
+        progress.pack()
 
         result = tk.Text(
-            c,
-            height=7,
-            width=58,
-            state="disabled",
-            wrap="word"
+            c, height=5, width=62,
+            state="disabled", wrap="word"
         )
-        result.pack(padx=15, pady=5)
+        result.pack(padx=14, pady=5)
 
-        def show_result(text_value):
-            result.config(state="normal")
-            result.delete("1.0", "end")
-            result.insert("1.0", text_value)
-            result.config(state="disabled")
+        action_frame = tk.Frame(c, bg=WINDOW_BG)
+        action_frame.pack(pady=8)
 
-        def check_github():
+        def show_result(value):
+            try:
+                result.config(state="normal")
+                result.delete("1.0", "end")
+                result.insert("1.0", value)
+                result.config(state="disabled")
+            except tk.TclError:
+                pass
+
+        def start_self_update(download_url, latest):
+            import tempfile
+            import subprocess
+            import os
+            import sys
+            import urllib.request
+
+            target = str(Path(__file__).resolve())
+            fd, temp_path = tempfile.mkstemp(
+                prefix="xos_update_", suffix=".py"
+            )
+            os.close(fd)
+
+            status.config(text=f"v{latest} indiriliyor...")
+            progress.config(text="Güncelleme dosyası indiriliyor...")
+            update_btn.config(state="disabled")
+            check_btn.config(state="disabled")
+            win.update_idletasks()
+
+            def download_worker():
+                try:
+                    request = urllib.request.Request(
+                        download_url,
+                        headers={"User-Agent": "XUpdateTool-XOS"}
+                    )
+                    with urllib.request.urlopen(request, timeout=30) as response:
+                        data = response.read()
+
+                    if not data or len(data) < 1000:
+                        raise RuntimeError(
+                            "İndirilen güncelleme dosyası geçersiz görünüyor."
+                        )
+
+                    Path(temp_path).write_bytes(data)
+
+                    try:
+                        py_compile.compile(temp_path, doraise=True)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            f"Yeni X OS dosyası doğrulanamadı: {exc}"
+                        )
+
+                    updater_code = r"""
+import os
+import sys
+import time
+import shutil
+import subprocess
+from pathlib import Path
+
+target = Path(sys.argv[1]).resolve()
+downloaded = Path(sys.argv[2]).resolve()
+backup = Path(sys.argv[3]).resolve()
+python_exe = sys.executable
+
+time.sleep(2.5)
+
+try:
+    if not downloaded.exists():
+        raise RuntimeError("Güncelleme dosyası bulunamadı.")
+
+    if target.exists():
+        shutil.copy2(target, backup)
+
+    os.replace(str(downloaded), str(target))
+
+    subprocess.Popen(
+        [python_exe, str(target)],
+        cwd=str(target.parent),
+        close_fds=True
+    )
+
+except Exception:
+    try:
+        if backup.exists():
+            shutil.copy2(backup, target)
+            subprocess.Popen(
+                [python_exe, str(target)],
+                cwd=str(target.parent),
+                close_fds=True
+            )
+    except Exception:
+        pass
+
+try:
+    if downloaded.exists():
+        downloaded.unlink()
+except Exception:
+    pass
+
+try:
+    Path(sys.argv[4]).unlink(missing_ok=True)
+except Exception:
+    pass
+"""
+
+                    updater_fd, updater_name = tempfile.mkstemp(
+                        prefix="xos_updater_", suffix=".py"
+                    )
+                    os.close(updater_fd)
+                    updater_path = Path(updater_name)
+                    updater_path.write_text(
+                        updater_code, encoding="utf-8"
+                    )
+
+                    backup = Path(target + ".backup")
+
+                    subprocess.Popen(
+                        [
+                            sys.executable,
+                            str(updater_path),
+                            target,
+                            temp_path,
+                            str(backup),
+                            str(updater_path)
+                        ],
+                        cwd=str(Path(target).parent),
+                        creationflags=getattr(
+                            subprocess, "CREATE_NO_WINDOW", 0
+                        ),
+                        close_fds=True
+                    )
+
+                    def finish_update():
+                        try:
+                            status.config(
+                                text=(
+                                    f"v{latest} indirildi. "
+                                    "X OS yeniden başlatılıyor..."
+                                )
+                            )
+                            progress.config(
+                                text="Güncelleme uygulanıyor..."
+                            )
+                            show_result(
+                                f"Yeni sürüm v{latest} indirildi.\n\n"
+                                "Eski sürüm yedekleniyor ve X OS "
+                                "yeniden başlatılıyor."
+                            )
+                            self.after(700, self.destroy)
+                        except tk.TclError:
+                            pass
+
+                    self.after(0, finish_update)
+
+                except Exception as exc:
+                    error_text = str(exc)
+
+                    def show_error():
+                        try:
+                            update_btn.config(state="normal")
+                            check_btn.config(state="normal")
+                            status.config(
+                                text="Güncelleme indirilemedi."
+                            )
+                            progress.config(text="")
+                            show_result(
+                                "Güncelleme kurulamadı.\n\n"
+                                f"Hata: {error_text}"
+                            )
+                        except tk.TclError:
+                            pass
+
+                    self.after(0, show_error)
+
+            import threading
+            threading.Thread(
+                target=download_worker, daemon=True
+            ).start()
+
+        def check():
             check_btn.config(state="disabled")
             status.config(text="GitHub'da güncelleme aranıyor...")
-            show_result("Bağlanıyor...")
+            progress.config(text="Bağlanıyor...")
+            show_result("GitHub Releases kontrol ediliyor...")
             win.update_idletasks()
 
             def worker():
                 import urllib.request
                 import json
-                import threading
-
-                owner = XOS_GITHUB_OWNER
-                repo = XOS_GITHUB_REPO
-
-                if (
-                    not owner or owner == "YOUR_GITHUB_USERNAME" or
-                    not repo or repo == "YOUR_XOS_REPOSITORY"
-                ):
-                    self.after(0, lambda: (
-                        check_btn.config(state="normal"),
-                        status.config(text="GitHub deposu ayarlanmamış."),
-                        show_result(
-                            "XOS_GITHUB_OWNER ve XOS_GITHUB_REPO "
-                            "değerlerini kendi GitHub depona göre değiştir."
-                        )
-                    ))
-                    return
 
                 url = (
                     f"https://api.github.com/repos/"
@@ -1932,139 +2076,178 @@ class XOS(tk.Tk):
                         data.get("body", "")
                     ).strip() or "Değişiklik notu yok."
 
-                    release_url = str(
-                        data.get("html_url", "")
-                    ).strip()
-
                     assets = data.get("assets", [])
                     asset_url = ""
 
                     for asset in assets:
-                        if asset.get("name") == XOS_RELEASE_ASSET:
+                        name = str(asset.get("name", "")).strip()
+                        if name in (
+                            "xos_gui_admin.py",
+                            "xos_gui_admin_v9.py"
+                        ):
                             asset_url = str(
                                 asset.get("browser_download_url", "")
-                            )
-                            break
+                            ).strip()
+                            if asset_url:
+                                break
 
-                    def compare_versions(a, b):
-                        try:
-                            pa = tuple(
-                                int(x)
-                                for x in a.split(".")
-                                if x.isdigit()
+                    if not asset_url:
+                        for asset in assets:
+                            name = str(asset.get("name", ""))
+                            if name.lower().endswith(".py"):
+                                asset_url = str(
+                                    asset.get("browser_download_url", "")
+                                ).strip()
+                                if asset_url:
+                                    break
+
+                    def version_tuple(value):
+                        parts = []
+                        for part in str(value).split("."):
+                            digits = "".join(
+                                ch for ch in part if ch.isdigit()
                             )
-                            pb = tuple(
-                                int(x)
-                                for x in b.split(".")
-                                if x.isdigit()
-                            )
-                            n = max(len(pa), len(pb))
-                            return (
-                                pa + (0,) * (n-len(pa))
-                            ) < (
-                                pb + (0,) * (n-len(pb))
-                            )
-                        except Exception:
-                            return a != b
+                            if digits:
+                                parts.append(int(digits))
+                        return tuple(parts or [0])
+
+                    is_new = (
+                        bool(latest)
+                        and version_tuple(latest)
+                        > version_tuple(current_version)
+                    )
 
                     def done():
-                        check_btn.config(state="normal")
+                        try:
+                            check_btn.config(state="normal")
+                            progress.config(text="Kontrol tamamlandı.")
 
-                        if not latest:
-                            status.config(
-                                text="GitHub sürüm bilgisi okunamadı."
-                            )
-                            return
+                            if not latest:
+                                status.config(
+                                    text="GitHub sürüm bilgisi okunamadı."
+                                )
+                                show_result(
+                                    "Release içinde tag_name bulunamadı."
+                                )
+                                return
 
-                        if compare_versions(XOS_VERSION, latest):
+                            if not is_new:
+                                status.config(
+                                    text=(
+                                        f"✓ X OS güncel — v"
+                                        f"{current_version}"
+                                    )
+                                )
+                                update_btn.config(
+                                    state="disabled",
+                                    text="⬇ Güncelleme yok"
+                                )
+                                show_result(
+                                    f"GitHub'daki son sürüm: v{latest}\n\n"
+                                    "Yeni güncelleme bulunamadı."
+                                )
+                                return
+
                             status.config(
                                 text=f"🆕 Yeni sürüm bulundu: v{latest}"
                             )
-
-                            text_value = (
-                                f"Mevcut sürüm: v{XOS_VERSION}\n"
+                            show_result(
+                                f"Mevcut sürüm: v{current_version}\n"
                                 f"Yeni sürüm: v{latest}\n\n"
                                 f"Değişiklikler:\n{notes}"
                             )
-                            show_result(text_value)
 
-                            if asset_url:
-                                def download_release():
-                                    import webbrowser
-                                    webbrowser.open(asset_url)
+                            if not asset_url:
+                                update_btn.config(
+                                    state="disabled",
+                                    text="⬇ Güncelleme dosyası bulunamadı"
+                                )
+                                status.config(
+                                    text=(
+                                        f"v{latest} bulundu fakat "
+                                        "Release içinde .py dosyası yok."
+                                    )
+                                )
+                                return
 
-                                tk.Button(
-                                    c,
-                                    text="⬇ X OS Güncellemesini İndir",
-                                    command=download_release,
-                                    bg=ACCENT,
-                                    fg="white",
-                                    relief="flat",
-                                    padx=18,
-                                    pady=9
-                                ).pack(pady=8)
-                            else:
-                                tk.Button(
-                                    c,
-                                    text="🌐 GitHub Release'ı Aç",
-                                    command=lambda: __import__(
-                                        "webbrowser"
-                                    ).open(release_url),
-                                    bg="#374151",
-                                    fg="white",
-                                    relief="flat",
-                                    padx=18,
-                                    pady=9
-                                ).pack(pady=8)
-
-                        else:
-                            status.config(
-                                text=f"✓ X OS güncel — v{XOS_VERSION}"
+                            update_btn.config(
+                                text=f"⬇ Güncelle ve v{latest}'a Geç",
+                                state="normal",
+                                command=lambda: start_self_update(
+                                    asset_url, latest
+                                )
                             )
-                            show_result(
-                                f"GitHub'daki son yayın: v{latest}\n\n"
-                                f"Yeni güncelleme bulunamadı."
-                            )
+
+                        except tk.TclError:
+                            pass
 
                     self.after(0, done)
 
                 except Exception as exc:
-                    self.after(0, lambda: (
-                        check_btn.config(state="normal"),
-                        status.config(text="Güncelleme kontrolü başarısız."),
-                        show_result(
-                            "GitHub'a bağlanılamadı.\n\n"
-                            f"Hata: {exc}"
-                        )
-                    ))
+                    error_text = str(exc)
+
+                    def show_error():
+                        try:
+                            check_btn.config(state="normal")
+                            progress.config(text="")
+                            status.config(
+                                text="Güncelleme kontrolü başarısız."
+                            )
+                            show_result(
+                                "GitHub'a bağlanılamadı.\n\n"
+                                f"Hata: {error_text}"
+                            )
+                        except tk.TclError:
+                            pass
+
+                    self.after(0, show_error)
 
             import threading
             threading.Thread(
-                target=worker,
-                daemon=True
+                target=worker, daemon=True
             ).start()
 
         check_btn = tk.Button(
-            c,
+            action_frame,
             text="🔎 Güncellemeleri Kontrol Et",
-            command=check_github,
-            bg=ACCENT,
+            command=check,
+            bg=ACCENT, fg="white",
+            relief="flat",
+            font=("Segoe UI", 10, "bold"),
+            padx=18, pady=9
+        )
+        check_btn.pack(pady=4)
+
+        update_btn = tk.Button(
+            action_frame,
+            text="⬇ Güncelleme bulunamadı",
+            command=lambda: None,
+            bg="#9ca3af",
             fg="white",
             relief="flat",
             font=("Segoe UI", 10, "bold"),
             padx=18,
-            pady=9
+            pady=9,
+            state="disabled"
         )
-        check_btn.pack(pady=8)
+        update_btn.pack(pady=4)
 
         tk.Label(
             c,
-            text=f"GitHub: {XOS_GITHUB_OWNER}/{XOS_GITHUB_REPO}",
-            bg=WINDOW_BG,
-            fg="#9ca3af",
+            text=f"GitHub: {owner}/{repo}",
+            bg=WINDOW_BG, fg="#9ca3af",
             font=("Segoe UI", 8)
-        ).pack(pady=4)
+        ).pack(pady=5)
 
+        tk.Label(
+            c,
+            text=(
+                "Güncellemede mevcut dosya .backup olarak "
+                "yedeklenir."
+            ),
+            bg=WINDOW_BG, fg="#9ca3af",
+            font=("Segoe UI", 8)
+        ).pack()
     # ====================================================================
     # MÜZİK ÇALAR
     # ====================================================================
